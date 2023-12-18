@@ -240,6 +240,48 @@ def giotto_page_enrich(data: AnnData, groupby: str,
         print(f"Added data.obsm['{groupby}_enrich_scores']")
 
 ################################################################################
+             # Functions related to  Score #
+################################################################################
+def signaturescoring_score(data: sc.AnnData, groupby: str,
+                           method: str = None,
+                           cluster_marker_key: str = None, 
+                           verbose: bool = False):
+
+    # check method
+    methods = ['adjusted_neighborhood_scoring', 'ucell_scoring', 'seurat_scoring', 'jasmine_scoring', 'seurat_ag_scoring', 'seurat_lvg_scoring']
+    if method not in methods:
+        raise Exception(f"Got method={method}; expected one of : {methods}")
+    
+    # check key
+    if type(cluster_marker_key) == type(None):
+        cluster_marker_key = f'{groupby}_markers'
+        
+    # import package
+    import signaturescoring as ssc
+    
+    # mean var
+    #df_mean_var = ssc.utils.utils.get_mean_and_variance_gene_expression(data, estim_var = True)
+
+    scores = {}
+    for k in data.uns[cluster_marker_key].keys():
+        mrk = data.uns[cluster_marker_key][k].tolist()
+        ssc.score_signature(
+            adata=data,                 # preprocessed (log-normalized) gene expression data in an AnnData object 
+            gene_list=mrk,               # gene expression signature, type list
+            method=method,
+            score_name='scores',         # scores stored in adata.obs column defined by score_name
+            #df_mean_var=df_mean_var
+        )
+        scores[k] = data.obs['scores']
+    
+    # format and add
+    scores = pd.DataFrame(scores, index=data.obs_names)
+    data.obsm[f'{groupby}_enrich_scores'] = scores
+    
+    if verbose:
+        print(f"Added data.obsm['{groupby}_enrich_scores']")
+        
+################################################################################
              # Functions related to Coexpression Score #
 ################################################################################
 @njit
@@ -735,6 +777,7 @@ def coexpr_specificity_score(data: sc.AnnData, groupby: str,
 ################################################################################
 def get_markers(data: sc.AnnData, groupby: str,
                 var_groups: str = None,
+                method: str = "t-test", tie_correct: bool = True,
                 logfc_cutoff: float = 0, padj_cutoff: float = .05,
                 t_cutoff: float=3,
                 n_top: int = 5, rerun_de: bool = True, gene_order=None,
@@ -752,6 +795,10 @@ def get_markers(data: sc.AnnData, groupby: str,
             comparison of genes for.
             Must specify defined column in data.obs[groupby].
             Must be categorical type.
+        method: str
+            method for marker detection (see scanpy.tl.rank_genes_groups)
+        tie_correct: bool
+            tie correction for marker detection (see scanpy.tl.rank_genes_groups)
         var_groups: str
             Specifies a column in data.var of type boolean, with True indicating
             the candidate genes to use when determining marker genes per cluster.
@@ -790,6 +837,8 @@ def get_markers(data: sc.AnnData, groupby: str,
                 genes as values.
     """
 
+    if verbose:
+        print("rank marker genes")
     if rerun_de:
         if type(var_groups) != type(None):
             #data_sub = data[:, data.var[var_groups]]
@@ -806,13 +855,17 @@ def get_markers(data: sc.AnnData, groupby: str,
             data_sub.var_names = data.var_names.values[genes_bool]
 
             sc.tl.rank_genes_groups(data_sub, groupby=groupby, use_raw=False,
+                                    method=method, tie_correct=tie_correct,
                                     pts=pts)
             data.uns['rank_genes_groups'] = data_sub.uns['rank_genes_groups']
         else:
             sc.tl.rank_genes_groups(data, groupby=groupby, use_raw=False,
+                                    method=method, tie_correct=tie_correct,
                                     pts=pts)
 
     #### Getting marker genes for each cluster...
+    if verbose:
+        print("filter marker genes")
     genes_rank = pd.DataFrame(data.uns['rank_genes_groups']['names'])
     tvals_rank = pd.DataFrame(data.uns['rank_genes_groups']['scores'])
     logfcs_rank = pd.DataFrame(data.uns['rank_genes_groups']['logfoldchanges'])
@@ -838,7 +891,7 @@ def get_markers(data: sc.AnnData, groupby: str,
 
     data.uns[f'{groupby}_markers'] = cluster_genes
     if verbose:
-        print(f"Added data.uns['{groupby}_markers']")
+        print(f"Added data.uns['{groupby}_markers']", flush=True)
 
 ################################################################################
  # Methods for normalizing scores and assigning to cell type based on score #

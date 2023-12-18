@@ -16,7 +16,7 @@ from numba.typed import List
 from numba import jit
 
 from .cluster_score import giotto_page_enrich, code_enrich, coexpr_enrich, \
-                                                                     get_markers
+                                                                     get_markers, signaturescoring_score
 from ._group_methods import group_scores
 from ._neighbors import enrich_neighbours, all_neighbours, general_neighbours
 from ..utils.general import summarise_data_fast
@@ -410,7 +410,8 @@ def run_enrich(data: sc.AnnData, groupby: str, enrich_method: str,
                n_cpus: int, squash_exception: bool=False):
     """ Runs desired enrichment method.
     """
-    enrich_options = ['code', 'coexpr', 'giotto']
+    sigscoring_options = ['adjusted_neighborhood_scoring', 'ucell_scoring', 'seurat_scoring', 'seurat_ag_scoring', 'seurat_lvg_scoring', 'jasmine_scoring']
+    enrich_options = ['code', 'coexpr', 'giotto'] + sigscoring_options
     if enrich_method not in enrich_options:
         raise Exception(
        f"Got enrich_method={enrich_method}; expected one of : {enrich_options}")
@@ -423,10 +424,14 @@ def run_enrich(data: sc.AnnData, groupby: str, enrich_method: str,
     elif enrich_method == 'giotto':
         giotto_page_enrich(data, groupby,
                               rerun_de=False, verbose=False)
+    elif enrich_method in sigscoring_options:
+        signaturescoring_score(data, groupby, method=enrich_method, verbose=False)
 
 # The key function #
 def merge_clusters(data: sc.AnnData, groupby: str,
-                   var_groups: str=None, n_top_genes: int = 6, t_cutoff: int=3,
+                   var_groups: str=None, 
+                   marker_method: str="t-test_overestim_var", marker_tie_correct:bool=True,
+                   n_top_genes: int = 6, t_cutoff: int=3,
                    marker_padj_cutoff: float=.05, gene_order: str=None,
                    min_de: int=1,
                    enrich_method: str = 'code', p_cut: float=0.01,
@@ -447,6 +452,10 @@ def merge_clusters(data: sc.AnnData, groupby: str,
     groupby: str
         Specifies the clusters to merge, defined in data.obs[groupby]. Must
         be categorical type.
+    marker_method: str
+        method for marker detection (see scanpy.tl.rank_genes_groups)
+    marker_tie_correct: bool
+        method for marker detection (see scanpy.tl.rank_genes_groups)    
     var_groups: str
         Specifies a column in data.var of type boolean, with True indicating
         the candidate genes to use when determining marker genes per cluster.
@@ -527,51 +536,34 @@ def merge_clusters(data: sc.AnnData, groupby: str,
             marker genes in data.uns[f'{groupby}_merged_markers']
     """
 
-    ### Initial merge ##
+    ### Initialize ##
     if verbose:
-        print( "Initial merge." )
-
-    get_markers(data, groupby, n_top=n_top_genes, verbose=False,
-                var_groups=var_groups, t_cutoff=t_cutoff,
-                padj_cutoff=marker_padj_cutoff,
-                gene_order=gene_order, min_de=min_de)
-    run_enrich(data, groupby, enrich_method, n_cpus,
-               squash_exception=squash_exception)
-
+        print( f"Initialize", flush=True)
     old_labels = data.obs[groupby].values.astype(str)
-
-    merge_clusters_single(data, groupby, f'{groupby}_merged',
-                          k=k, mnn_frac_cutoff=mnn_frac_cutoff, random_state=random_state,
-                          p_cut=p_cut,
-                          score_group_method=score_group_method,
-                          p_adjust=p_adjust, p_adjust_method=p_adjust_method,
-                          verbose=False)
+    data.obs[f'{groupby}_merged'] = data.obs[groupby].values.astype(str)
 
     ## Merging per iteration until convergence ##
     for i in range(max_iter):
-
+        if verbose:
+            print( f"iteration {i}", flush=True)
+            print( f"-- markers", flush=True)
         # Running marker gene determination #
-        get_markers(data, f'{groupby}_merged', n_top=n_top_genes,
-                       verbose=False, var_groups=var_groups, t_cutoff=t_cutoff,
-                        padj_cutoff=marker_padj_cutoff,
-                        gene_order=gene_order, min_de=min_de)
+        get_markers(data, f'{groupby}_merged', 
+                    method=marker_method, tie_correct=marker_tie_correct,
+                    n_top=n_top_genes,
+                    verbose=False, var_groups=var_groups, t_cutoff=t_cutoff,
+                    padj_cutoff=marker_padj_cutoff,
+                    gene_order=gene_order, min_de=min_de)
 
         # Running the enrichment scoring #
+        if verbose:
+            print( f"-- enrich", flush=True)
         run_enrich(data, f'{groupby}_merged', enrich_method, n_cpus,
                    squash_exception=squash_exception)
 
-        # Checking if we have converged #
-        new_labels = data.obs[f'{groupby}_merged'].values.astype(str)
-        if len(np.unique(old_labels)) == len(np.unique(new_labels)):
-            if verbose:
-                print(f"Added data.obs[f'{groupby}_merged']")
-                print("Exiting due to convergence.")
-                return
-
-        if verbose:
-            print(f"Merge iteration {i}.")
-
         # Running new merge operation #
+        if verbose:
+            print( f"-- merge", flush=True)
         old_labels = data.obs[f'{groupby}_merged'].values.astype(str)
         merge_clusters_single(data, f'{groupby}_merged', f'{groupby}_merged',
                               k=k, mnn_frac_cutoff=mnn_frac_cutoff,
@@ -581,14 +573,30 @@ def merge_clusters(data: sc.AnnData, groupby: str,
                               p_adjust_method = p_adjust_method,
                               p_cut=p_cut, verbose=False)
 
+        # Checking if we have converged #
+        if verbose:
+            print( f"-- check conversion", flush=True)
+        new_labels = data.obs[f'{groupby}_merged'].values.astype(str)
+        if len(np.unique(old_labels)) == len(np.unique(new_labels)):
+            if verbose:
+                print(f"Added data.obs[f'{groupby}_merged']")
+                print("Exiting due to convergence.")
+                return
+
     ## Reached max iter, exit with current solution ##
     # Running marker gene determination #
-    get_markers(data, f'{groupby}_merged', n_top=n_top_genes, verbose=False,
+    if verbose:
+        print( f"Run final marker detection", flush=True)
+    get_markers(data, f'{groupby}_merged', 
+                method=marker_method, tie_correct=marker_tie_correct,
+                n_top=n_top_genes, verbose=False,
                 var_groups=var_groups, t_cutoff=t_cutoff,
                 padj_cutoff=marker_padj_cutoff,
                 gene_order=gene_order, min_de=min_de)
 
     # Running the enrichment scoring #
+    if verbose:
+        print( f"Run final enrichment", flush=True)
     run_enrich(data, f'{groupby}_merged', enrich_method, n_cpus,
                squash_exception=squash_exception)
 
