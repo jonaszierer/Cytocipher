@@ -6,7 +6,7 @@ import pandas as pd
 import scanpy as sc
 
 
-from scipy.stats import ttest_ind
+from scipy.stats import ttest_ind, wilcoxon
 from statsmodels.stats.multitest import multipletests
 
 from sklearn.cluster import KMeans
@@ -144,7 +144,7 @@ def merge_neighbours_v2(cluster_labels: np.array,
         mapping the original cluster label to the merged cluster labels.
     """
     label_set = np.unique(cluster_labels)
-
+    
     #### Getting groups of clusters which will be merged...
     merge_groups = get_merge_groups( label_pairs )
 
@@ -303,6 +303,7 @@ def merge_clusters_single(data: sc.AnnData, groupby: str, key_added: str,
                           mnn_frac_cutoff: float = None,
                           random_state: int=20,
                           p_cut: float=.1, score_group_method: str='kmeans',
+                          test_group_method: str = "ttest",
                           p_adjust: bool=False, p_adjust_method: str='fdr_bh',
                           verbose: bool = True):
     """ Gets pairs of clusters which are not significantly different from one
@@ -362,8 +363,13 @@ def merge_clusters_single(data: sc.AnnData, groupby: str, key_added: str,
                                                          score_group_method, k,
                                                          kmeans)
 
-                t, p = ttest_ind(labeli_labelj_scores_mean,
-                                 labelj_labelj_scores_mean)
+                if test_group_method == "ttest":
+                    t, p = ttest_ind(labeli_labelj_scores_mean,
+                                     labelj_labelj_scores_mean)
+                elif test_group_method == "wilcoxon":    
+                    w, p = wilcoxon(labeli_labelj_scores_mean,
+                                    labelj_labelj_scores_mean)
+                    t = w
 
                 #### Above outputs nan if all 0's for one-case;
                 #### Indicates significant difference in case where one or the
@@ -440,6 +446,7 @@ def merge_clusters(data: sc.AnnData, groupby: str,
                    k: int = 15, random_state=20,
                    n_cpus: int = 1,
                    score_group_method: str='quantiles',
+                   test_group_method: str='ttest',
                    p_adjust: bool=True, p_adjust_method: str='fdr_bh',
                    squash_exception: bool=True,
                    verbose: bool = True):
@@ -539,9 +546,8 @@ def merge_clusters(data: sc.AnnData, groupby: str,
     ### Initialize ##
     if verbose:
         print( f"Initialize", flush=True)
-    old_labels = data.obs[groupby].values.astype(str)
-    data.obs[f'{groupby}_merged'] = data.obs[groupby].values.astype(str)
-
+    data.obs[f'{groupby}_merged'] = data.obs[groupby]
+    
     ## Merging per iteration until convergence ##
     for i in range(max_iter):
         if verbose:
@@ -569,15 +575,18 @@ def merge_clusters(data: sc.AnnData, groupby: str,
                               k=k, mnn_frac_cutoff=mnn_frac_cutoff,
                               random_state=random_state,
                               score_group_method = score_group_method,
+                              test_group_method=test_group_method,
                               p_adjust = p_adjust,
                               p_adjust_method = p_adjust_method,
                               p_cut=p_cut, verbose=False)
 
         # Checking if we have converged #
+        new_labels = data.obs[f'{groupby}_merged'].values.astype(str)
         if verbose:
             print( f"-- check conversion", flush=True)
-        new_labels = data.obs[f'{groupby}_merged'].values.astype(str)
-        if len(np.unique(old_labels)) == len(np.unique(new_labels)):
+            print(f"--- old labels [{len(np.unique(old_labels))}]: {','.join(np.unique(old_labels))}")
+            print(f"--- new labels [{len(np.unique(new_labels))}]: {','.join(np.unique(new_labels))}")
+        if (len(np.unique(old_labels)) == len(np.unique(new_labels))) or (len(np.unique(new_labels)) == 1):
             if verbose:
                 print(f"Added data.obs[f'{groupby}_merged']")
                 print("Exiting due to convergence.")

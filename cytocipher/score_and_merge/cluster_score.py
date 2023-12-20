@@ -280,7 +280,8 @@ def signaturescoring_score(data: sc.AnnData, groupby: str,
     
     if verbose:
         print(f"Added data.obsm['{groupby}_enrich_scores']")
-        
+
+
 ################################################################################
              # Functions related to Coexpression Score #
 ################################################################################
@@ -837,31 +838,55 @@ def get_markers(data: sc.AnnData, groupby: str,
                 genes as values.
     """
 
-    if verbose:
-        print("rank marker genes")
+
     if rerun_de:
+        if verbose:
+            print("rank marker genes")
         if type(var_groups) != type(None):
             #data_sub = data[:, data.var[var_groups]]
-
             ## Updating how the data is subsetting so prevents making a deep
             ## copy which can cause memory issues with BIG datasets!!!!
             genes_bool = data.var[var_groups].values
-
             X_sub = data.X[:, genes_bool]
 
             data_sub = sc.AnnData(X_sub)
             data_sub.obs[groupby] = data.obs[groupby].values
             data_sub.obs[groupby] = data_sub.obs[groupby].astype('category')
             data_sub.var_names = data.var_names.values[genes_bool]
-
-            sc.tl.rank_genes_groups(data_sub, groupby=groupby, use_raw=False,
-                                    method=method, tie_correct=tie_correct,
-                                    pts=pts)
+            if method == "cosg":
+                from cosg import cosg
+                cosg(data,
+                     groupby=groupby,
+                     key_added='rank_genes_groups',
+                     remove_lowly_expressed=True,
+                     n_genes_user=500)
+                # add fake pvalues
+                p = data.uns['rank_genes_groups']['scores'].copy()
+                for i in range(len(p)):
+                    p[i] = 0
+                data.uns['rank_genes_groups']['pvals_adj'] = p
+            else: 
+                sc.tl.rank_genes_groups(data_sub, groupby=groupby, use_raw=False,
+                                        method=method, tie_correct=tie_correct,
+                                        pts=pts)
             data.uns['rank_genes_groups'] = data_sub.uns['rank_genes_groups']
         else:
-            sc.tl.rank_genes_groups(data, groupby=groupby, use_raw=False,
-                                    method=method, tie_correct=tie_correct,
-                                    pts=pts)
+            if method == "cosg":
+                from cosg import cosg
+                cosg(data,
+                     groupby=groupby,
+                     key_added='rank_genes_groups',
+                     remove_lowly_expressed=True,
+                     n_genes_user=500)
+                # add fake pvalues
+                p = data.uns['rank_genes_groups']['scores'].copy()
+                for i in range(len(p)):
+                    p[i] = 0
+                data.uns['rank_genes_groups']['pvals_adj'] = p
+            else:   
+                sc.tl.rank_genes_groups(data, groupby=groupby, use_raw=False,
+                                        method=method, tie_correct=tie_correct,
+                                        pts=pts)
 
     #### Getting marker genes for each cluster...
     if verbose:
