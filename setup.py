@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setup(
     name='cytocipher',
-    version='0.1.21',
+    version='0.1.22',
     description='Cluster significance analysis in scRNA-seq',
     url='https://github.com/BradBalderson/Cytocipher',
     author='Brad Balderson',
