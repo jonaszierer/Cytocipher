@@ -56,7 +56,7 @@ def get_pred(X, group):
     X: matrix of predictors
     group: vector of class labels
     """
-    X_train, X_test, y_train, y_test = train_test_split(X, group, test_size=0.5)
+    X_train, X_test, y_train, y_test = train_test_split(X, group, test_size=0.5, random_state=0)
     pipe = make_pipeline(StandardScaler(with_mean=False), LogisticRegression(max_iter=100, solver="sag", penalty="l2", C=0.02))
     pipe.fit(X_train, y_train)
     y_prob = pipe.predict_proba(X_test)
@@ -122,6 +122,38 @@ def pairwise_classifiers(data,
         data.uns[f'{groupby}_classifier_curves' ] = all_curves
 
 
+
+
+def oneagainstall_classifiers(data,
+                              groupby: str,
+                              markers_key:str = None):
+    """ trains classifiers for each cluster against all others. Only used to
+        populate the obsm for heatmap plotting
+
+    Parameters
+    ----------
+    data: sc.AnnData
+        Single cell RNA-seq anndata, QC'd a preprocessed to log-cpm in data.X
+    groupby: str
+        Specifies the clusters to merge, defined in data.obs[groupby]. Must
+        be categorical type.
+    """
+    
+    ## init
+    if markers_key is None:
+        markers_key = f"{groupby}_markers"
+    
+    ## get cluster markers
+    markers = [value for sublist in data.uns[markers_key].values() for value in sublist]
+
+    ## train & predict
+    _, _, mod = get_pred(data.X[ :  ,  data.var_names.isin(markers)], data.obs[groupby])
+    ## predict for all and save
+    y_prob = mod.predict_proba(data.X[ :  ,  data.var_names.isin(markers)])
+    data.obsm[f'{groupby}_predictions'] = pd.DataFrame(y_prob, index=data.obs_names, columns=mod.classes_).reindex(columns=data.obs[groupby].cat.categories.tolist())
+    
+
+
 def plot_curves(data, groupby, 
                 figsize=(20,15),
                 which_curve:str='roc',
@@ -157,7 +189,7 @@ def plot_curves(data, groupby,
                 axs[i1,i2-1].set_yticks([])
                 axs[i1,i2-1].axis('off')
 
-        ## y labels on riight side
+        ## y labels on right side
         axs[i1,len(clusters)-2].set_ylabel(c1, rotation=270, fontsize=8, labelpad=12)
         axs[i1,len(clusters)-2].yaxis.set_label_position("right")
 
@@ -266,12 +298,15 @@ def merge_clusters_by_classifier(data: sc.AnnData,
         else:   
             print(f"Added data.obs[f'{groupby}_merged']")
             ## final classifier with curves
-            pairwise_classifiers(data, groupby = "cluster_merged", calc_curves = True)
+            pairwise_classifiers(data, groupby = f'{groupby}_merged', calc_curves = True)
+            oneagainstall_classifiers(data, groupby = f'{groupby}_merged')
             print("Exiting due to convergence.")
             return
 
     ## final classifier with curves
-    pairwise_classifiers(data, groupby = "cluster_merged", calc_curves = True)
+    pairwise_classifiers(data, groupby = f'{groupby}_merged', calc_curves = True)
+    oneagainstall_classifiers(data, groupby = f'{groupby}_merged')
+        
     if verbose:
         print(f"Added data.obs[f'{groupby}_merged']")
         print(f"Exiting due to reaching max_iter {max_iter}")

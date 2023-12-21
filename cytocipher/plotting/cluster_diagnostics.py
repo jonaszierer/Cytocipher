@@ -27,7 +27,8 @@ from .cd_helpers import get_pairs, get_p_data, diagnostic_scatter
 ################################################################################
                     # Coexpression scoring plots #
 ################################################################################
-def enrich_heatmap(data: AnnData, groupby: str, per_cell: bool=True,
+def enrich_heatmap(data: AnnData, groupby: str, which_one="enrich_scores",
+                   per_cell: bool=True,
                    plot_group: str=None, figsize=(8, 8),
                    dendrogram: bool=False, vmax=1,
                    n_clust_cells: int=50,
@@ -96,7 +97,7 @@ def enrich_heatmap(data: AnnData, groupby: str, per_cell: bool=True,
 
         data = data[cell_indices]
 
-    cell_scores_df = data.obsm[f'{groupby}_enrich_scores']
+    cell_scores_df = data.obsm[f'{groupby}_{which_one}']
 
     ##### Handling scale, only min-max implemented.
     expr_scores = cell_scores_df.values
